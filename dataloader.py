@@ -139,7 +139,8 @@ def get_all_clients(all_data, args):
             train_dataset,
             batch_size=args.batch_size,
             shuffle=True,
-            collate_fn=TrainDataset.collate_fn
+            collate_fn=TrainDataset.collate_fn,
+            drop_last=True
         )
         train_dataloader_list.append(train_dataloader)
 

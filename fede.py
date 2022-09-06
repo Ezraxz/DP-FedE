@@ -1,13 +1,16 @@
 
 
+import sys
 from dataloader import *
 import pickle
 import os
 import copy
 import logging
 from kge_model import KGEModel
-from torch import optim
 import torch.nn.functional as F
+from torch.utils.data import TensorDataset
+
+from pyvacy import optim, analysis, sampling
 
 
 class Server(object):
@@ -65,44 +68,132 @@ class Client(object):
 
         self.kge_model = KGEModel(args, args.model)
         self.ent_embed = None
+        
+        self.first = True
+
+        self.iteration = 0
 
     def __len__(self):
         return len(self.train_dataloader.dataset)
 
     def client_update(self):
-        optimizer = optim.Adam([{'params': self.rel_embed},
-                                {'params': self.ent_embed}], lr=self.args.lr)
-
-        losses = []
+        if self.args.use_dp == True:
+            optimizer_dp = optim.DPAdam(
+                l2_norm_clip=self.args.l2_norm_clip,
+                noise_multiplier= self.args.noise_multiplier,
+                minibatch_size=self.args.batch_size,
+                microbatch_size=self.args.microbatch_size, 
+                params=[{'params': self.rel_embed}, {'params': self.ent_embed}],
+                lr=self.args.lr
+            )             
+                      
+            losses = []
         
-        for i in range(self.args.local_epoch):
-            for batch in self.train_dataloader:
-                positive_sample, negative_sample, sample_idx = batch
 
-                positive_sample = positive_sample.to(self.args.gpu)
-                negative_sample = negative_sample.to(self.args.gpu)
+            for i in range(self.args.local_epoch):
+                for batch in self.train_dataloader:
+                    optimizer_dp.zero_grad()
+                    positive_samples, negative_samples, sample_idx = batch
+                    self.iteration += 1
+                    for idx in range(self.args.batch_size):
+                        idx = torch.tensor([idx]) 
+                        positive_sample = torch.index_select(
+                            positive_samples,
+                            dim=0,
+                            index=idx
+                        )
+                        negative_sample = torch.index_select(
+                            negative_samples,
+                            dim=0,
+                            index=idx
+                        )
+                       
+                        positive_sample = positive_sample.to(self.args.gpu)
+                        negative_sample = negative_sample.to(self.args.gpu)
 
-                negative_score = self.kge_model((positive_sample, negative_sample),
-                                                 self.rel_embed, self.ent_embed)
+                        negative_score = self.kge_model((positive_sample, negative_sample),
+                                                        self.rel_embed, self.ent_embed)
 
-                negative_score = (F.softmax(negative_score * self.args.adversarial_temperature, dim=1).detach()
-                                  * F.logsigmoid(-negative_score)).sum(dim=1)
+                        negative_score = (F.softmax(negative_score * self.args.adversarial_temperature, dim=1).detach()
+                                        * F.logsigmoid(-negative_score)).sum(dim=1)
 
-                positive_score = self.kge_model(positive_sample,
-                                                self.rel_embed, self.ent_embed, neg=False)
+                        positive_score = self.kge_model(positive_sample,
+                                                        self.rel_embed, self.ent_embed, neg=False)
 
-                positive_score = F.logsigmoid(positive_score).squeeze(dim=1)
+                        positive_score = F.logsigmoid(positive_score).squeeze(dim=1)
 
-                positive_sample_loss = - positive_score.mean()
-                negative_sample_loss = - negative_score.mean()
+                        positive_sample_loss = - positive_score.mean()
+                        negative_sample_loss = - negative_score.mean()
 
-                loss = (positive_sample_loss + negative_sample_loss) / 2
+                        loss = (positive_sample_loss + negative_sample_loss) / 2
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                        positive_sample_loss = positive_sample_loss / 2
+                        negative_sample_loss = negative_sample_loss / 2
+                        
+                        optimizer_dp.zero_microbatch_grad()
+                        positive_sample_loss.backward()
+                        optimizer_dp.microbatch_step(sample_type=True)
+                        
+                        optimizer_dp.zero_microbatch_grad()
+                        negative_sample_loss.backward()
+                        optimizer_dp.microbatch_step(sample_type=False)
 
-                losses.append(loss.item())
+                    optimizer_dp.step()
+
+                    losses.append(loss.item())
+            
+            logging.info('Client {} : Achieves ({}, {})-DP'.format(
+                self.client_id,
+                analysis.epsilon(
+                    len(self.train_dataloader.dataset),
+                    self.args.batch_size,
+                    self.args.noise_multiplier,
+                    self.iteration,
+                    1e-5
+                ),
+            1e-5,
+            ))
+        
+        if self.args.use_dp == False:
+            optimizer_1 = torch.optim.Adam([{'params': self.rel_embed},
+                                    {'params': self.ent_embed}], lr=self.args.lr)
+            
+            # optimizer_2 = torch.optim.Adam([{'params': self.rel_embed},
+            #                         {'params': self.ent_embed}], lr=self.args.lr)
+            
+            losses = []
+            
+            for i in range(self.args.local_epoch):
+                for batch in self.train_dataloader:
+                    positive_sample, negative_sample, sample_idx = batch
+
+                    positive_sample = positive_sample.to(self.args.gpu)
+                    negative_sample = negative_sample.to(self.args.gpu)
+
+                    negative_score = self.kge_model((positive_sample, negative_sample),
+                                                    self.rel_embed, self.ent_embed)
+
+                    negative_score = (F.softmax(negative_score * self.args.adversarial_temperature, dim=1).detach()
+                                    * F.logsigmoid(-negative_score)).sum(dim=1)
+
+                    positive_score = self.kge_model(positive_sample,
+                                                    self.rel_embed, self.ent_embed, neg=False)
+
+                    positive_score = F.logsigmoid(positive_score).squeeze(dim=1)
+
+                    positive_sample_loss = - positive_score.mean()
+                    negative_sample_loss = - negative_score.mean()
+
+                    loss = (positive_sample_loss + negative_sample_loss) / 2
+
+                    optimizer_1.zero_grad()
+                    # loss.backward()
+                    positive_sample_loss.backward()
+                    negative_sample_loss.backward()
+                    optimizer_1.step()
+                                        
+
+                    losses.append(loss.item())
 
         return np.mean(losses)
     

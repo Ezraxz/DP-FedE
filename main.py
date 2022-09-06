@@ -21,7 +21,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='./data/fb15k237-3.pkl', type=str)
     
-    parser.add_argument('--name', default='fb15k237_3', type=str)
+    parser.add_argument('--name', default='fed3_split_dp_dim64', type=str)
     parser.add_argument('--state_dir', '-state_dir', default='./state', type=str)
     parser.add_argument('--log_dir', '-log_dir', default='./log', type=str)
     parser.add_argument('--tb_log_dir', '-tb_log_dir', default='./tb_log', type=str)
@@ -43,19 +43,24 @@ if __name__ == '__main__':
     
     # for FedE
     parser.add_argument('--num_client', default=3, type=int)
-    parser.add_argument('--max_round', default=10000, type=int)
-    parser.add_argument('--local_epoch', default=3)
+    parser.add_argument('--max_round', default=80, type=int)
+    parser.add_argument('--local_epoch', default=1)
     parser.add_argument('--fraction', default=1, type=float)
     parser.add_argument('--log_per_round', default=1, type=int)
     parser.add_argument('--check_per_round', default=5, type=int)
 
-    parser.add_argument('--early_stop_patience', default=15, type=int)
+    parser.add_argument('--early_stop_patience', default=5, type=int)
     parser.add_argument('--gamma', default=10.0, type=float)
     parser.add_argument('--epsilon', default=2.0, type=float)
-    parser.add_argument('--hidden_dim', default=128, type=float)
+    parser.add_argument('--hidden_dim', default=64, type=int)
     parser.add_argument('--gpu', default='0', type=str)
     parser.add_argument('--num_cpu', default=10, type=int)
     parser.add_argument('--adversarial_temperature', default=1.0, type=float)
+    
+    parser.add_argument('--use_dp', default=True, type=bool)
+    parser.add_argument('--microbatch_size', default=1, type=int)
+    parser.add_argument('--l2_norm_clip', default=1.0, type=float)
+    parser.add_argument('--noise_multiplier', default=1.0, type=float)
     
     parser.add_argument('--seed', default=12345, type=int)
 
