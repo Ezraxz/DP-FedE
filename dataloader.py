@@ -1,5 +1,9 @@
 
 
+import operator
+from functools import reduce
+import random
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
@@ -7,6 +11,21 @@ from collections import defaultdict as ddict
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
+
+class KGBatchSampler:
+    def __init__(self, dataset, batch_size, batch_list):
+        self.length = len(dataset)
+        self.batch_size = batch_size
+        self.batch_list = batch_list
+        
+    def __iter__(self):
+        for _ in range(round(self.length / self.batch_size)):
+            indices = random.choice(self.batch_list)
+            if len(indices) == self.batch_size:
+                yield indices
+
+    def __len__(self):
+        return round(self.length / self.batch_size)
 
 class TrainDataset(Dataset):
     def __init__(self, triples, nentity, negative_sample_size):
@@ -110,13 +129,46 @@ def get_all_clients(all_data, args):
     rel_embed_list = []
 
     ent_freq_list = []
-
+    
     for data in tqdm(all_data):
         nrelation = len(np.unique(data['train']['edge_type']))
 
         train_triples = np.stack((data['train']['edge_index_ori'][0],
                                   data['train']['edge_type'],
                                   data['train']['edge_index_ori'][1])).T
+        
+        ent2tri = [[] for i in range(nentity)]
+        # print("三元组总数: ", len(train_triples))
+        for idx, tri in enumerate(train_triples):
+            h, r, t = tri
+            ent2tri[h].append(idx)
+            ent2tri[t].append(idx)
+            
+            
+        # sum = 0
+        # num = 0
+        # sorttri = {}
+        # for item in ent2tri:
+        #     if(len(item) > 0):
+        #         if len(item) not in sorttri.keys():
+        #             sorttri[len(item)] = 1
+        #         else:
+        #             sorttri[len(item)] += 1
+        #         sum += len(item)
+        #         num += 1
+        # ord = sorted(sorttri.keys(), reverse=True)
+        # ordtrinum = {}
+        # for idx in ord:
+        #     ordtrinum[idx] = sorttri[idx]
+        # print("每个实体所属三元组个数: " , ordtrinum)
+        # print("每个实体所属三元组平均个数: " ,sum / num)
+        # sys.exit()
+        
+        ent2tri = reduce(operator.add, ent2tri)
+        batch_list = []
+        for i in range(round(len(ent2tri) / args.batch_size)):
+            batch_list.append(ent2tri[i*args.batch_size : (i+1)*args.batch_size])
+        
 
         valid_triples = np.stack((data['valid']['edge_index_ori'][0],
                                   data['valid']['edge_type'],
@@ -137,10 +189,9 @@ def get_all_clients(all_data, args):
         # dataloader
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
+            # batch_size=args.batch_size,
+            batch_sampler=KGBatchSampler(train_dataset, args.batch_size, batch_list),
             collate_fn=TrainDataset.collate_fn,
-            drop_last=True
         )
         train_dataloader_list.append(train_dataloader)
 
