@@ -2,16 +2,15 @@
 
 import sys
 from dataloader import *
-import pickle
+import json
 import os
 import copy
 import logging
 from kge_model import KGEModel
 import torch.nn.functional as F
-from torch.utils.data import TensorDataset
 
 from pyvacy import optim, analysis, sampling
-
+from attack import client_attack, server_attack
 
 class Server(object):
     def __init__(self, args, nentity):
@@ -38,7 +37,6 @@ class Server(object):
         agg_ent_mask = ent_update_weights
         agg_ent_mask[ent_update_weights != 0] = 1
         ent_w_sum = torch.sum(agg_ent_mask, dim=0)
-        #权重矩阵
         ent_w = agg_ent_mask / ent_w_sum
         ent_w[torch.isnan(ent_w)] = 0
        
@@ -69,16 +67,17 @@ class Client(object):
         self.kge_model = KGEModel(args, args.model)
         self.ent_embed = None
         
-        self.first = True
-
         self.iteration = 0
 
     def __len__(self):
         return len(self.train_dataloader.dataset)
 
     def client_update(self):
+        eps = 0
         if self.args.use_dp == True:
             optimizer_dp = optim.DPAdam(
+                margs=self.args,
+                len_embed=len(self.ent_embed),
                 l2_norm_clip=self.args.l2_norm_clip,
                 noise_multiplier= self.args.noise_multiplier,
                 minibatch_size=self.args.batch_size,
@@ -86,10 +85,9 @@ class Client(object):
                 params=[{'params': self.rel_embed}, {'params': self.ent_embed}],
                 lr=self.args.lr
             )             
-                      
+
             losses = []
         
-
             for i in range(self.args.local_epoch):
                 for batch in self.train_dataloader:
                     optimizer_dp.zero_grad()
@@ -139,28 +137,26 @@ class Client(object):
                         optimizer_dp.microbatch_step(sample_type=False)
 
                     optimizer_dp.step()
-
                     losses.append(loss.item())
-            
-            logging.info('Client {} : Achieves ({}, {})-DP'.format(
-                self.client_id,
-                analysis.epsilon(
-                    len(self.train_dataloader.dataset),
-                    self.args.batch_size,
-                    self.args.noise_multiplier,
-                    self.iteration,
-                    1e-5
-                ),
-            1e-5,
-            ))
+                
+                eps = analysis.epsilon(
+                        len(self.train_dataloader.dataset),
+                        self.args.batch_size,
+                        self.args.noise_multiplier,
+                        self.iteration,
+                        1e-5
+                    )
+                
+                logging.info('Client {} : Achieves ({}, {})-DP'.format(
+                    self.client_id,
+                    eps,
+                1e-5,
+                ))
         
         if self.args.use_dp == False:
-            optimizer_1 = torch.optim.Adam([{'params': self.rel_embed},
+            optimizer = torch.optim.Adam([{'params': self.rel_embed},
                                     {'params': self.ent_embed}], lr=self.args.lr)
-            
-            # optimizer_2 = torch.optim.Adam([{'params': self.rel_embed},
-            #                         {'params': self.ent_embed}], lr=self.args.lr)
-            
+
             losses = []
             
             for i in range(self.args.local_epoch):
@@ -186,19 +182,15 @@ class Client(object):
 
                     loss = (positive_sample_loss + negative_sample_loss) / 2
 
-                    optimizer_1.zero_grad()
-                    # loss.backward()
-                    positive_sample_loss.backward()
-                    negative_sample_loss.backward()
-                    optimizer_1.step()
-                                        
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()                            
 
                     losses.append(loss.item())
 
-        return np.mean(losses)
+        return np.mean(losses), eps
     
-    def private_deal(self):
-        pass
+
 
     def client_eval(self, istest=False):
         if istest:
@@ -244,7 +236,7 @@ class FedE(object):
         self.args = args
 
         train_dataloader_list, valid_dataloader_list, test_dataloader_list, \
-            self.ent_freq_mat, rel_embed_list, nentity = get_all_clients(all_data, args)
+            self.ent_freq_mat, rel_embed_list, nentity, self.all_train_triples = get_all_clients(all_data, args)
 
         self.args.nentity = nentity
 
@@ -263,6 +255,27 @@ class FedE(object):
         self.total_valid_data_size = sum([len(client.valid_dataloader.dataset) for client in self.clients])
         self.valid_eval_weights = [len(client.valid_dataloader.dataset) / self.total_valid_data_size for client in self.clients]
 
+        if self.args.is_attack:
+            self.before_attack_load()
+            #transfer inference attack
+            self.align_rel_list, self.rel_target2attack = get_attack_data(all_data, args)
+            self.attacker_client = client_attack.Attacker_Client(args) 
+            self.reverse_embed = None
+            self.attack_idx = self.args.attack_client
+            self.target_idx = self.args.target_client
+            self.agg_ent_mask = self.ent_freq_mat
+            self.agg_ent_mask[self.ent_freq_mat != 0] = 1
+            
+            #relation inference attack
+            self.attacker_server = server_attack.Attacker_Server(args)
+            self.attacker_server.get_eva_info(self.all_train_triples[self.args.target_client])
+            self.attacker_server.make_test_data()
+            self.tp = 0
+            self.fn = 0
+            self.fp = 0
+            self.tn = 0
+        
+        
     def write_training_loss(self, loss, e):
         self.args.writer.add_scalar("training/loss", loss, e)
 
@@ -301,12 +314,80 @@ class FedE(object):
             sample_set = np.random.choice(self.num_clients, n_sample, replace=False)
 
             self.send_emb()
+            
+            #active transfer inference attack
+            if self.args.is_attack and self.args.attack_type == 'client' and num_round == 1:
+                logging.info('Attack-2 : attacker {}, target {}'.format(self.attack_idx, self.target_idx))
+                self.reverse_embed = self.attacker_client.reverse_tail(self.clients[self.attack_idx].ent_embed)
+                 
+            #fkg client train
             round_loss = 0
+            eps_avg = 0
             for k in iter(sample_set):
-                client_loss = self.clients[k].client_update()               
+                client_loss, eps = self.clients[k].client_update()               
                 round_loss += client_loss
+                eps_avg += eps
             round_loss /= n_sample
+            eps_avg /= self.num_clients
+            
+            #active transfer inference attack
+            if self.args.is_attack and self.args.attack_type == 'client'and num_round == 1:
+                self.clients[self.attack_idx].ent_embed = self.reverse_embed
+            
+            #passive relation inference attack
+            if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
+                logging.info('Attack-3 : attacker Server, target {}'.format(self.target_idx))
+                self.attacker_server.attack_3(self.clients[self.target_idx].ent_embed.clone().detach())
+                
+            #active relation inference attack
+            if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
+                logging.info('Attack-4 : attacker Server, target {}'.format(self.target_idx))
+                for k in iter(sample_set):
+                    self.clients[k].args.local_epoch = 5
+                self.attacker_server.select_ent(self.agg_ent_mask[self.args.target_client])
+                self.input_ent_embed = self.clients[self.target_idx].ent_embed
+                noise_embed = self.attacker_server.add_noise(self.input_ent_embed)
+                self.clients[self.target_idx].ent_embed = noise_embed
+                continue
+            if self.args.is_attack and num_round >= 1 and num_round <= 10 and self.args.attack_type == 'server':
+                tp, fn, fp, tn = self.attacker_server.attack_4(self.clients[self.target_idx].ent_embed)
+                self.tp += tp
+                self.fn += fn
+                self.fp += fp
+                self.tn += tn
+                self.attacker_server.select_ent(self.agg_ent_mask[self.args.target_client])
+                noise_embed = self.attacker_server.add_noise(self.input_ent_embed)
+                self.clients[self.target_idx].ent_embed = noise_embed
+                continue
+            if self.args.is_attack and self.args.attack_type == 'server' and  num_round > 10:
+                precision = self.tp / (self.tp + self.fp)
+                recall = self.tp / (self.tp +  self.fn)
+                f1_score = 2 * precision * recall / (precision + recall)
+                logging.info('precision : {}, {} / {}'.format(precision, self.tp, self.tp + self.fp))
+                logging.info('recall : {}, {} / {}'.format(recall, self.tp, self.tp +  self.fn))
+                logging.info('f1 score : {}'.format(f1_score))
+                
+                self.attacker_server.server_attack_res["active_relation"]["precision"] = precision
+                self.attacker_server.server_attack_res["active_relation"]["recall"] = recall
+                self.attacker_server.server_attack_res["active_relation"]["f1_score"] = f1_score
+                json.dump(self.attacker_server.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
+                sys.exit()  
+                        
+            #fkg server aggregation
             self.server.aggregation(self.clients, self.ent_freq_mat, num_round)
+            
+            #active transfer inference attack
+            if self.args.is_attack and num_round == 1 + self.args.cmp_round and self.args.attack_type == 'client':
+                self.attacker_client.attack_2(self.server.send_emb(), self.rel_target2attack)
+            
+            #passive transfer inference attack
+            if self.args.is_attack and num_round == 0 and self.args.attack_type == 'client':
+                logging.info('Attack-1 : attacker {}, target {}'.format(self.attack_idx, self.target_idx))
+                self.attacker_client.get_local_data(self.clients[self.attack_idx].ent_embed, self.clients[self.attack_idx].rel_embed,
+                                                    self.all_train_triples[self.attack_idx])
+                self.attacker_client.get_target_embedding(self.server.send_emb())
+                self.attacker_client.attack_1(self.all_train_triples[self.target_idx], self.rel_target2attack, self.align_rel_list)
+                        
 
             logging.info('round: {} | loss: {:.4f}'.format(num_round, np.mean(round_loss)))
             self.write_training_loss(np.mean(round_loss), num_round)
@@ -326,7 +407,7 @@ class FedE(object):
                     logging.info('best model is at round {0}, mrr {1:.4f}, bad count {2}'.format(
                         best_epoch, best_mrr, bad_count))
 
-            if bad_count >= self.args.early_stop_patience:
+            if bad_count >= self.args.early_stop_patience or eps_avg >= self.args.sgd_eps:
                 logging.info('early stop at round {}'.format(num_round))
                 break
 
@@ -336,6 +417,13 @@ class FedE(object):
         self.before_test_load()
         self.evaluate(istest=True)
 
+    def before_attack_load(self):
+        state = torch.load(self.args.attack_embed_dir + self.args.start_round + '.ckpt', map_location=self.args.gpu)
+        self.server.ent_embed = state['ent_embed']
+        for idx, client in enumerate(self.clients):
+            client.rel_embed = state['rel_embed'][idx]
+        self.evaluate()
+    
     def before_test_load(self):
         state = torch.load(os.path.join(self.args.state_dir, self.args.name + '.best'), map_location=self.args.gpu)
         self.server.ent_embed = state['ent_embed']

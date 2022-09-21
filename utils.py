@@ -31,3 +31,7 @@ def init_dir(args):
     # logging
     if not os.path.exists(args.log_dir):
         os.makedirs(args.log_dir)
+
+    # attack res
+    if not os.path.exists(args.attack_res_dir):
+        os.makedirs(args.attack_res_dir)

@@ -20,7 +20,9 @@ class KGBatchSampler:
         
     def __iter__(self):
         for _ in range(round(self.length / self.batch_size)):
-            indices = random.choice(self.batch_list)
+            start = random.randint(0, len(self.batch_list) - self.batch_size)
+            end = start + self.batch_size
+            indices = self.batch_list[start:end]
             if len(indices) == self.batch_size:
                 yield indices
 
@@ -35,10 +37,14 @@ class TrainDataset(Dataset):
         self.negative_sample_size = negative_sample_size
         
         self.hr2t = ddict(set)
+        # self.rt2h = ddict(set)
         for h, r, t in triples:
             self.hr2t[(h, r)].add(t)
+            # self.rt2h[(r, t)].add(h)
         for h, r in self.hr2t:
             self.hr2t[(h, r)] = np.array(list(self.hr2t[(h, r)]))
+        # for r, t in self.rt2h:
+        #     self.rt2h[(r, t)] = np.array(list(self.rt2h[(r, t)]))
 
     def __len__(self):
         return self.len
@@ -127,8 +133,8 @@ def get_all_clients(all_data, args):
     test_dataloader_list = []
     valid_dataloader_list = []
     rel_embed_list = []
-
     ent_freq_list = []
+    all_train_triples = []
     
     for data in tqdm(all_data):
         nrelation = len(np.unique(data['train']['edge_type']))
@@ -136,39 +142,7 @@ def get_all_clients(all_data, args):
         train_triples = np.stack((data['train']['edge_index_ori'][0],
                                   data['train']['edge_type'],
                                   data['train']['edge_index_ori'][1])).T
-        
-        ent2tri = [[] for i in range(nentity)]
-        # print("三元组总数: ", len(train_triples))
-        for idx, tri in enumerate(train_triples):
-            h, r, t = tri
-            ent2tri[h].append(idx)
-            ent2tri[t].append(idx)
-            
-            
-        # sum = 0
-        # num = 0
-        # sorttri = {}
-        # for item in ent2tri:
-        #     if(len(item) > 0):
-        #         if len(item) not in sorttri.keys():
-        #             sorttri[len(item)] = 1
-        #         else:
-        #             sorttri[len(item)] += 1
-        #         sum += len(item)
-        #         num += 1
-        # ord = sorted(sorttri.keys(), reverse=True)
-        # ordtrinum = {}
-        # for idx in ord:
-        #     ordtrinum[idx] = sorttri[idx]
-        # print("每个实体所属三元组个数: " , ordtrinum)
-        # print("每个实体所属三元组平均个数: " ,sum / num)
-        # sys.exit()
-        
-        ent2tri = reduce(operator.add, ent2tri)
-        batch_list = []
-        for i in range(round(len(ent2tri) / args.batch_size)):
-            batch_list.append(ent2tri[i*args.batch_size : (i+1)*args.batch_size])
-        
+        all_train_triples.append(train_triples)
 
         valid_triples = np.stack((data['valid']['edge_index_ori'][0],
                                   data['valid']['edge_type'],
@@ -186,13 +160,29 @@ def get_all_clients(all_data, args):
         valid_dataset = TestDataset(valid_triples, all_triples, nentity, client_mask_ent)
         test_dataset = TestDataset(test_triples, all_triples, nentity, client_mask_ent)
 
-        # dataloader
-        train_dataloader = DataLoader(
-            train_dataset,
-            # batch_size=args.batch_size,
-            batch_sampler=KGBatchSampler(train_dataset, args.batch_size, batch_list),
-            collate_fn=TrainDataset.collate_fn,
-        )
+        # dp_dataloader or not
+        if args.use_dp:
+            ent2tri = [[] for i in range(nentity)]
+            for idx, tri in enumerate(train_triples):
+                h, r, t = tri
+                ent2tri[h].append(idx)
+                ent2tri[t].append(idx)
+                            
+            batch_list = reduce(operator.add, ent2tri)
+
+            train_dataloader = DataLoader(
+                train_dataset,
+                batch_sampler=KGBatchSampler(train_dataset, args.batch_size, batch_list),
+                collate_fn=TrainDataset.collate_fn,
+            )
+        else:
+            train_dataloader = DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                shuffle=True,
+                collate_fn=TrainDataset.collate_fn,
+            )
+        
         train_dataloader_list.append(train_dataloader)
 
         valid_dataloader = DataLoader(
@@ -230,4 +220,29 @@ def get_all_clients(all_data, args):
     ent_freq_mat = torch.stack(ent_freq_list).to(args.gpu)
 
     return train_dataloader_list, valid_dataloader_list, test_dataloader_list, \
-           ent_freq_mat, rel_embed_list, nentity
+           ent_freq_mat, rel_embed_list, nentity, all_train_triples
+
+def get_attack_data(all_data, args):
+    target = args.target_client
+    attack = args.attack_client
+    target_id_map = dict()
+    attack_id_map = dict()
+    
+    for idx, ori_rel in enumerate(all_data[target]['train']['edge_type_ori']):
+        rel = all_data[target]['train']['edge_type'][idx]
+        if ori_rel not in target_id_map.keys():
+            target_id_map[ori_rel] = rel
+    
+    for idx, ori_rel in enumerate(all_data[attack]['train']['edge_type_ori']):
+        rel = all_data[attack]['train']['edge_type'][idx]
+        if ori_rel not in attack_id_map.keys():
+            attack_id_map[ori_rel] = rel
+        
+    align_rel_list = []
+    rel_target2attack = dict()
+    for key in attack_id_map.keys():
+        if key in target_id_map.keys():
+            align_rel_list.append(attack_id_map[key])
+            rel_target2attack[target_id_map[key]] = attack_id_map[key]
+    
+    return align_rel_list, rel_target2attack
