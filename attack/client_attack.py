@@ -1,17 +1,21 @@
 import json
 import random
-import os
+import pickle
 from statistics import mean
 import sys
 import torch
 import logging
 import numpy as np
-
+import torch.nn as nn
 
 class Attacker_Client(object):
     def __init__(self, args):
         self.args = args
-        
+        self.embedding_range = torch.Tensor([(args.gamma + args.epsilon) / args.hidden_dim])
+        self.gamma = nn.Parameter(
+            torch.Tensor([args.gamma]),
+            requires_grad=False
+        )
         #attack-1 && attack-2
         self.local_ent_embedding = None
         self.local_rel_embedding = None
@@ -43,8 +47,8 @@ class Attacker_Client(object):
         self.client_attack_res["passive_transfer"]["recall"] = []
         self.client_attack_res["passive_transfer"]["f1score"] = []
         for i in range(20):
-            self.client_attack_res["passive_transfer"]["threshold"].append(i*0.02)
-            evaulate_triples = self.compare_score(test_triples, i*0.02)
+            self.client_attack_res["passive_transfer"]["threshold"].append(i*0.04)
+            evaulate_triples = self.compare_score(test_triples, i*0.04)
             self.evaulate(len(test_triples), evaulate_triples, rel_target2attack, 1)
         mean_f1_score = mean(self.client_attack_res["passive_transfer"]["f1score"])
         self.client_attack_res["passive_transfer"]["mean_f1_score"] = mean_f1_score
@@ -56,8 +60,8 @@ class Attacker_Client(object):
         self.client_attack_res["active_transfer"]["recall"] = []
         self.client_attack_res["active_transfer"]["f1score"] = []
         for i in range(20):
-            self.client_attack_res["active_transfer"]["threshold"].append(i*0.02)
-            evaulate_triples = self.compute_s2(updated_ent_embed, i*0.02)
+            self.client_attack_res["active_transfer"]["threshold"].append(i*0.04)
+            evaulate_triples = self.compute_s2(updated_ent_embed, i*0.04)
             self.evaulate(self.len_test_tri, evaulate_triples, rel_target2attack, 2)
         mean_f1_score = mean(self.client_attack_res["active_transfer"]["f1score"])
         self.client_attack_res["active_transfer"]["mean_f1_score"] = mean_f1_score
@@ -83,26 +87,37 @@ class Attacker_Client(object):
     def make_test_data(self, target_triples, rel_target2attack):
         logging.info("Making test data...")
         test_triples = []
+       # save_triples = []
         
         rel_attack2target = {v: k for k, v in rel_target2attack.items()}
         self.target_triples = target_triples.tolist()
-     
-        for tri in self.target_triples:
-            h, r, t = tri
-            if self.align_ent_list[h] == 1 and self.align_ent_list[t] == 1 and r in rel_target2attack.keys():
-                test_tri = [h, rel_target2attack[r], t]
-                if test_tri not in self.local_triples:
-                    test_triples.append(test_tri)
-            if len(test_triples) >= self.args.test_data_count / 2:
-                break
-       
+        if self.args.test_mode == 'normal':  
+            for tri in self.target_triples:
+                h, r, t = tri
+                if self.align_ent_list[h] == 1 and self.align_ent_list[t] == 1 and r in rel_target2attack.keys():
+                    test_tri = [h, rel_target2attack[r], t]
+                    if test_tri not in self.local_triples:
+                        test_triples.append(test_tri)
+                if len(test_triples) >= self.args.test_data_count / 2:
+                    break
+        else:
+            attack_test_triples = pickle.load(open("./data/attack-test.pkl", 'rb'))
+            for tri in attack_test_triples:
+                h, r, t = tri
+                if self.align_ent_list[h] == 1 and self.align_ent_list[t] == 1 and r in rel_target2attack.keys():
+                    test_tri = [h, rel_target2attack[r], t]
+                    if test_tri not in self.local_triples:
+                        test_triples.append(test_tri)
+                if len(test_triples) >= self.args.test_data_count / 2:
+                    break
+        
         num_true = len(test_triples)
         
         align_ent_id = []
         for id in range(len(self.align_ent_list)):
             if self.align_ent_list[id] == 1:
                 align_ent_id.append(id)
-
+        
         while len(test_triples) < 2 * num_true:
             h = random.choice(align_ent_id)
             t = random.choice(align_ent_id)
@@ -114,7 +129,8 @@ class Attacker_Client(object):
             tri_1 = [h, rel_attack2target[r], t]
             if tri not in self.local_triples and tri_1 not in self.target_triples:
                 test_triples.append(tri)
-
+                #save_triples.append(tri_1)
+        #pickle.dump(save_triples, open('./data/attack-test.pkl', 'wb'))
         return test_triples
             
     def compare_score(self, test_triples, add_thd):
@@ -173,12 +189,37 @@ class Attacker_Client(object):
         score = None
         if self.args.model == 'TransE':
             score = (head + relation) - tail
-            score = torch.norm(score, p=1, dim=2)
+            score = self.gamma.item() - torch.norm(score, p=1, dim=2)
         
         elif self.args.model == 'DistMult':
             score = (head * relation) * tail
             score = score.sum(dim = 2)
         
+        elif self.args.model == 'ComplEx':
+            re_head, im_head = torch.chunk(head, 2, dim=2)
+            re_relation, im_relation = torch.chunk(relation, 2, dim=2)
+            re_tail, im_tail = torch.chunk(tail, 2, dim=2)
+            re_score = re_head * re_relation - im_head * im_relation
+            im_score = re_head * im_relation + im_head * re_relation
+            score = re_score * re_tail + im_score * im_tail
+            score = score.sum(dim = 2)
+            
+        elif self.args.model == 'RotatE':
+            pi = 3.14159265358979323846
+            re_head, im_head = torch.chunk(head, 2, dim=2)
+            re_tail, im_tail = torch.chunk(tail, 2, dim=2)
+            #Make phases of relations uniformly distributed in [-pi, pi]
+            phase_relation = relation/(self.embedding_range.item()/pi)
+            re_relation = torch.cos(phase_relation)
+            im_relation = torch.sin(phase_relation)
+            re_score = re_head * re_relation - im_head * im_relation
+            im_score = re_head * im_relation + im_head * re_relation
+            re_score = re_score - re_tail
+            im_score = im_score - im_tail
+            score = torch.stack([re_score, im_score], dim = 0)
+            score = score.norm(dim = 0)
+            score = self.gamma.item() - score.sum(dim = 2)
+
         return score
 
     def evaulate(self, len_test_data, triples, rel_target2attack, type):
@@ -288,5 +329,4 @@ class Attacker_Client(object):
             if score_1 / score_2 > self.args.threshold_attack2 + add_rhd:
                 exist_tri.append(tri)
                
-            
         return exist_tri

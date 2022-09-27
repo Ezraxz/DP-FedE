@@ -18,16 +18,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='./data/fb15k237-2-attack.pkl', type=str)
     
-    # parser.add_argument('--name', default='fed3_batch_64_noise_0.5_clip_1.2', type=str)
-    # parser.add_argument('--name', default='fed2_server_attack_dp', type=str)
-    # parser.add_argument('--name', default='fed2_client_attack_dp_250', type=str)
-    parser.add_argument('--name', default='fed2', type=str)
-    # parser.add_argument('--name', default='test', type=str)
-    parser.add_argument('--state_dir', '-state_dir', default='./state/220920/fed2', type=str)
-    parser.add_argument('--log_dir', '-log_dir', default='./log/220920', type=str)
+    # parser.add_argument('--name', default='fed2_server_attack_dp_145', type=str)
+    # parser.add_argument('--name', default='fed2_client_attack_dp_145', type=str)
+    # parser.add_argument('--name', default='fed2_dp_2', type=str)
+    parser.add_argument('--name', default='test_attack_15_2', type=str)
+    parser.add_argument('--state_dir', '-state_dir', default='./state/220924/test', type=str)
+    parser.add_argument('--log_dir', '-log_dir', default='./log/220924', type=str)
     parser.add_argument('--tb_log_dir', '-tb_log_dir', default='./tb_log', type=str)
-    parser.add_argument('--attack_embed_dir', '-attack_embed_dir', default='./state/220920/fed2/fed2.', type=str)
-    parser.add_argument('--attack_res_dir', '-attack_res_dir', default='./attack_res/220920', type=str)
+    parser.add_argument('--attack_embed_dir', '-attack_embed_dir', default='./state/220924/test/test_attack.', type=str)
+    parser.add_argument('--attack_res_dir', '-attack_res_dir', default='./attack_res/220924', type=str)
     
     parser.add_argument('--model', default='TransE', choices=['TransE', 'RotatE', 'DistMult', 'ComplEx'])
     
@@ -54,7 +53,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', default=10.0, type=float)
     parser.add_argument('--epsilon', default=2.0, type=float)
     parser.add_argument('--hidden_dim', default=128, type=int)
-    parser.add_argument('--gpu', default='3', type=str)
+    parser.add_argument('--gpu', default='0', type=str)
     parser.add_argument('--num_cpu', default=10, type=int)
     parser.add_argument('--adversarial_temperature', default=1.0, type=float)
     
@@ -63,16 +62,18 @@ if __name__ == '__main__':
     parser.add_argument('--microbatch_size', default=1, type=int)
     parser.add_argument('--l2_norm_clip', default=1.2, type=float)
     parser.add_argument('--noise_multiplier', default=0.5, type=float)
-    parser.add_argument('--sgd_eps', default=200.0, type=float)
-    parser.add_argument('--svt_eps', default=8.0, type=float)
+    parser.add_argument('--sgd_eps', default=20.0, type=float)
+    parser.add_argument('--topk_eps', default=2.0, type=float)
+    parser.add_argument('--diff_mrr', default=0.0010, type=float)
+    parser.add_argument('--decline_mult', default=0.95, type=float)
     
     #attack_param
-    parser.add_argument('--is_attack', default=False, type=bool)
+    parser.add_argument('--is_attack', default=True, type=bool)
     parser.add_argument('--attack_type', default='client', type=str, choices=['server', 'client'])
     parser.add_argument('--target_client', default=0, type=int)
     parser.add_argument('--attack_client', default=1, type=int)
     parser.add_argument('--test_data_count', default=2000, type=int)
-    parser.add_argument('--start_round', default=200, type=int)
+    parser.add_argument('--start_round', default=15, type=int)
     
     #attack-1_param
     parser.add_argument('--threshold_attack1', default=1.00, type=float)
@@ -83,6 +84,9 @@ if __name__ == '__main__':
     
     #attack-3_param
     parser.add_argument('--rel_num_multiple', default=1.0, type=float)
+    
+    #test
+    parser.add_argument('--test_mode', default='fake', type=str, choices=['normal', 'fake'])
     
     parser.add_argument('--seed', default=12345, type=int)
 

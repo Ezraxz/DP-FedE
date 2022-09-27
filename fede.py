@@ -11,6 +11,7 @@ import torch.nn.functional as F
 
 from pyvacy import optim, analysis, sampling
 from attack import client_attack, server_attack
+from utils import ThreadWithReturnValue
 
 class Server(object):
     def __init__(self, args, nentity):
@@ -68,6 +69,10 @@ class Client(object):
         self.ent_embed = None
         
         self.iteration = 0
+        self.eps = 0
+        self.loss = None
+        
+        self.real_parm = optim.real_parm(args, args.nentity)
 
     def __len__(self):
         return len(self.train_dataloader.dataset)
@@ -75,9 +80,11 @@ class Client(object):
     def client_update(self):
         eps = 0
         if self.args.use_dp == True:
+            if self.eps >= self.args.sgd_eps:
+                return self.loss,  self.eps
             optimizer_dp = optim.DPAdam(
                 margs=self.args,
-                len_embed=len(self.ent_embed),
+                real_parm=self.real_parm,
                 l2_norm_clip=self.args.l2_norm_clip,
                 noise_multiplier= self.args.noise_multiplier,
                 minibatch_size=self.args.batch_size,
@@ -87,6 +94,13 @@ class Client(object):
             )             
 
             losses = []
+            eps_pre = analysis.epsilon(
+                        len(self.train_dataloader.dataset),
+                        self.args.batch_size,
+                        self.args.noise_multiplier,
+                        self.iteration,
+                        1e-5
+                    )
         
             for i in range(self.args.local_epoch):
                 for batch in self.train_dataloader:
@@ -139,7 +153,7 @@ class Client(object):
                     optimizer_dp.step()
                     losses.append(loss.item())
                 
-                eps = analysis.epsilon(
+                eps_train = analysis.epsilon(
                         len(self.train_dataloader.dataset),
                         self.args.batch_size,
                         self.args.noise_multiplier,
@@ -147,6 +161,8 @@ class Client(object):
                         1e-5
                     )
                 
+                eps = eps_train - eps_pre + self.eps
+                self.eps = eps
                 logging.info('Client {} : Achieves ({}, {})-DP'.format(
                     self.client_id,
                     eps,
@@ -188,7 +204,8 @@ class Client(object):
 
                     losses.append(loss.item())
 
-        return np.mean(losses), eps
+        self.loss = np.mean(losses)
+        return self.loss, eps
     
 
 
@@ -243,7 +260,7 @@ class FedE(object):
         # client
         self.num_clients = len(train_dataloader_list)
         self.clients = [
-            Client(args, i, all_data[i], train_dataloader_list[i], valid_dataloader_list[i],
+            Client(self.args, i, all_data[i], train_dataloader_list[i], valid_dataloader_list[i],
                    test_dataloader_list[i], rel_embed_list[i]) for i in range(self.num_clients)
         ]
 
@@ -256,7 +273,8 @@ class FedE(object):
         self.valid_eval_weights = [len(client.valid_dataloader.dataset) / self.total_valid_data_size for client in self.clients]
 
         if self.args.is_attack:
-            self.before_attack_load()
+            if self.args.start_round != 0:
+                self.before_attack_load()
             #transfer inference attack
             self.align_rel_list, self.rel_target2attack = get_attack_data(all_data, args)
             self.attacker_client = client_attack.Attacker_Client(args) 
@@ -289,9 +307,9 @@ class FedE(object):
         state = {'ent_embed': self.server.ent_embed,
                  'rel_embed': [client.rel_embed for client in self.clients]}
         # delete previous checkpoint
-        for filename in os.listdir(self.args.state_dir):
-            if self.args.name in filename.split('.') and os.path.isfile(os.path.join(self.args.state_dir, filename)):
-                os.remove(os.path.join(self.args.state_dir, filename))
+        # for filename in os.listdir(self.args.state_dir):
+        #     if self.args.name in filename.split('.') and os.path.isfile(os.path.join(self.args.state_dir, filename)):
+        #         os.remove(os.path.join(self.args.state_dir, filename))
         # save current checkpoint
         torch.save(state, os.path.join(self.args.state_dir,
                                        self.args.name + '.' + str(e) + '.ckpt'))
@@ -300,6 +318,12 @@ class FedE(object):
         os.rename(os.path.join(self.args.state_dir, self.args.name + '.' + str(best_epoch) + '.ckpt'),
                   os.path.join(self.args.state_dir, self.args.name + '.best'))
 
+    def adaptive_eps(self, k, client_res, pre_client_res):
+        if client_res[k]['mrr'] - pre_client_res[k] < self.args.diff_mrr:
+            self.clients[k].args.noise_multiplier *= self.args.decline_mult
+            logging.info("client {} noise_multiplier {}".format(k, self.clients[k].args.noise_multiplier))
+        pre_client_res[k] = client_res[k]['mrr']
+    
     def send_emb(self):
         for k, client in enumerate(self.clients):
             client.ent_embed = self.server.send_emb()
@@ -308,7 +332,7 @@ class FedE(object):
         best_epoch = 0
         best_mrr = 0
         bad_count = 0
-
+        pre_client_res = [0] * self.num_clients
         for num_round in range(self.args.max_round):
             n_sample = max(round(self.args.fraction * self.num_clients), 1)
             sample_set = np.random.choice(self.num_clients, n_sample, replace=False)
@@ -319,12 +343,17 @@ class FedE(object):
             if self.args.is_attack and self.args.attack_type == 'client' and num_round == 1:
                 logging.info('Attack-2 : attacker {}, target {}'.format(self.attack_idx, self.target_idx))
                 self.reverse_embed = self.attacker_client.reverse_tail(self.clients[self.attack_idx].ent_embed)
-                 
+            
             #fkg client train
             round_loss = 0
             eps_avg = 0
+            threads = []
             for k in iter(sample_set):
-                client_loss, eps = self.clients[k].client_update()               
+                t = ThreadWithReturnValue(target=self.clients[k].client_update)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                client_loss, eps = t.join()
                 round_loss += client_loss
                 eps_avg += eps
             round_loss /= n_sample
@@ -338,7 +367,8 @@ class FedE(object):
             if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
                 logging.info('Attack-3 : attacker Server, target {}'.format(self.target_idx))
                 self.attacker_server.attack_3(self.clients[self.target_idx].ent_embed.clone().detach())
-                
+            
+            """
             #active relation inference attack
             if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
                 logging.info('Attack-4 : attacker Server, target {}'.format(self.target_idx))
@@ -372,7 +402,8 @@ class FedE(object):
                 self.attacker_server.server_attack_res["active_relation"]["f1_score"] = f1_score
                 json.dump(self.attacker_server.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
                 sys.exit()  
-                        
+            """   
+                     
             #fkg server aggregation
             self.server.aggregation(self.clients, self.ent_freq_mat, num_round)
             
@@ -386,16 +417,18 @@ class FedE(object):
                 self.attacker_client.get_local_data(self.clients[self.attack_idx].ent_embed, self.clients[self.attack_idx].rel_embed,
                                                     self.all_train_triples[self.attack_idx])
                 self.attacker_client.get_target_embedding(self.server.send_emb())
-                self.attacker_client.attack_1(self.all_train_triples[self.target_idx], self.rel_target2attack, self.align_rel_list)
+                self.attacker_client.attack_1(self.all_train_triples[self.target_idx], self.rel_target2attack, 
+                                              self.align_rel_list)
                         
 
             logging.info('round: {} | loss: {:.4f}'.format(num_round, np.mean(round_loss)))
             self.write_training_loss(np.mean(round_loss), num_round)
 
             if num_round % self.args.check_per_round == 0 and num_round != 0:
-                eval_res = self.evaluate()
+                eval_res, client_res = self.evaluate()
                 self.write_evaluation_result(eval_res, num_round)
-
+                for k in range(self.num_clients):
+                    self.adaptive_eps(k, client_res, pre_client_res)
                 if eval_res['mrr'] > best_mrr:
                     best_mrr = eval_res['mrr']
                     best_epoch = num_round
@@ -418,7 +451,8 @@ class FedE(object):
         self.evaluate(istest=True)
 
     def before_attack_load(self):
-        state = torch.load(self.args.attack_embed_dir + self.args.start_round + '.ckpt', map_location=self.args.gpu)
+        logging.info("loading embedding")
+        state = torch.load(self.args.attack_embed_dir + str(self.args.start_round) + '.ckpt', map_location=self.args.gpu)
         self.server.ent_embed = state['ent_embed']
         for idx, client in enumerate(self.clients):
             client.rel_embed = state['rel_embed'][idx]
@@ -437,9 +471,10 @@ class FedE(object):
             weights = self.test_eval_weights
         else:
             weights = self.valid_eval_weights
+        client_res_list = []
         for idx, client in enumerate(self.clients):
             client_res = client.client_eval(istest)
-
+            client_res_list.append(client_res)  
             logging.info('mrr: {:.4f}, hits@1: {:.4f}, hits@5: {:.4f}, hits@10: {:.4f}'.format(
                 client_res['mrr'], client_res['hits@1'],
                 client_res['hits@5'], client_res['hits@10']))
@@ -451,7 +486,7 @@ class FedE(object):
                      result['mrr'], result['hits@1'],
                      result['hits@5'], result['hits@10']))
 
-        return result
+        return result, client_res_list
 
 
 

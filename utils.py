@@ -1,5 +1,6 @@
 import os
 import logging
+from threading import Thread
 
 def init_logger(args):
     log_file = os.path.join(args.log_dir, args.name + '.log')
@@ -35,3 +36,12 @@ def init_dir(args):
     # attack res
     if not os.path.exists(args.attack_res_dir):
         os.makedirs(args.attack_res_dir)
+
+class ThreadWithReturnValue(Thread):
+    def run(self):
+        if self._target is not None:
+            self._return = self._target(*self._args, **self._kwargs)
+
+    def join(self):
+        super().join()
+        return self._return

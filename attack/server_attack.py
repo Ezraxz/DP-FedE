@@ -1,4 +1,7 @@
 import random
+import sys
+import json
+import pickle
 import logging
 import torch
 import numpy as np
@@ -36,23 +39,39 @@ class Attacker_Server(object):
         self.target_triples = target_triples.tolist()
     
     def make_test_data(self):
-        test_triples_index = np.random.choice(len(self.target_triples), round(self.args.test_data_count / 2)).tolist()
         test_triples = []
         test_links = []
         ent_index = []
         rel_index = []
-        for idx in test_triples_index:
-            h, r, t = self.target_triples[idx]
-            if h == t:
-                continue
-            test_triples.append(self.target_triples[idx])
-            ent_index.append(h)
-            ent_index.append(t)
-            if r not in rel_index:
-                self.center_links.append([h, t])
-            rel_index.append(r)
-            self.target_links.append([h, 1, t])
-            test_links.append([h, 1, t])
+        
+        if self.args.test_mode == 'normal':
+            test_triples_index = np.random.choice(len(self.target_triples), round(self.args.test_data_count / 2)).tolist() 
+            for idx in test_triples_index:
+                h, r, t = self.target_triples[idx]
+                if h == t:
+                    continue
+                test_triples.append(self.target_triples[idx])
+                ent_index.append(h)
+                ent_index.append(t)
+                if r not in rel_index:
+                    self.center_links.append([h, t])
+                rel_index.append(r)
+                self.target_links.append([h, 1, t])
+                test_links.append([h, 1, t])
+        else:
+            test_triples = pickle.load(open("./data/attack-test.pkl", 'rb'))
+            for tri in test_triples:
+                h, r, t = tri
+                if h == t:
+                    continue
+                ent_index.append(h)
+                ent_index.append(t)
+                if r not in rel_index:
+                    self.center_links.append([h, t])
+                rel_index.append(r)
+                self.target_links.append([h, 1, t])
+                test_links.append([h, 1, t])
+        
             
         ent_index = list(set(ent_index))
         rel_index = list(set(rel_index))
@@ -81,12 +100,13 @@ class Attacker_Server(object):
         
         self.test_links = test_links
     
-
     def attack_3(self, target_ent_embed):
         link_embeds = self.get_links(target_ent_embed)
         link_label_score = self.clustering(link_embeds)
         sorted_links = self.sort_links(link_label_score)
         self.evaulate(sorted_links)
+        json.dump(self.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
+        sys.exit()
     
     def attack_4(self, updated_embed_2):
         sorted_ent = self.compute_influence(updated_embed_2)
@@ -98,6 +118,17 @@ class Attacker_Server(object):
             link_embed = tail - head
         
         elif self.args.model == 'DistMult':
+            link_embed = tail - head
+        
+        elif self.args.model == 'ComplEx':
+            re_head, im_head = torch.chunk(head, 2, dim=2)
+            re_tail, im_tail = torch.chunk(tail, 2, dim=2)
+            
+            re_relation = im_head * re_tail - re_head * im_tail
+            im_relation = re_head * re_tail + im_head * im_tail
+            link_embed = torch.div(re_relation, im_relation)
+        
+        elif self.args.model == 'RotatE':
             link_embed = tail - head
         
         return link_embed

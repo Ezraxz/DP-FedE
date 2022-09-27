@@ -4,6 +4,7 @@ import operator
 from functools import reduce
 import random
 import sys
+import pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -136,12 +137,15 @@ def get_all_clients(all_data, args):
     ent_freq_list = []
     all_train_triples = []
     
-    for data in tqdm(all_data):
+    for k, data in enumerate(tqdm(all_data)):
         nrelation = len(np.unique(data['train']['edge_type']))
 
         train_triples = np.stack((data['train']['edge_index_ori'][0],
                                   data['train']['edge_type'],
                                   data['train']['edge_index_ori'][1])).T
+        if args.test_mode == 'fake' and k == args.target_client:
+            attack_test_triples = np.array(pickle.load(open("./data/attack-test.pkl", 'rb')))
+            train_triples =  np.concatenate((train_triples, attack_test_triples), axis=0)
         all_train_triples.append(train_triples)
 
         valid_triples = np.stack((data['valid']['edge_index_ori'][0],
@@ -244,5 +248,5 @@ def get_attack_data(all_data, args):
         if key in target_id_map.keys():
             align_rel_list.append(attack_id_map[key])
             rel_target2attack[target_id_map[key]] = attack_id_map[key]
-    
+            
     return align_rel_list, rel_target2attack
