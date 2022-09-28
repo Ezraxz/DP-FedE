@@ -436,8 +436,9 @@ class FedE(object):
             if num_round % self.args.check_per_round == 0 and num_round != 0:
                 eval_res, client_res = self.evaluate()
                 self.write_evaluation_result(eval_res, num_round)
-                for k in range(self.num_clients):
-                    self.adaptive_eps(k, client_res, pre_client_res)
+                if self.args.use_dp:
+                    for k in range(self.num_clients):
+                        self.adaptive_eps(k, client_res, pre_client_res)
                 if eval_res['mrr'] > best_mrr:
                     best_mrr = eval_res['mrr']
                     best_epoch = num_round
