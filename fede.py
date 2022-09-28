@@ -333,13 +333,14 @@ class FedE(object):
         best_mrr = 0
         bad_count = 0
         pre_client_res = [0] * self.num_clients
-        visit = [2,4,8,16,24,32,48,64]
-        if len(visit) > 0 and self.clients[self.target_idx].eps >= visit[0]:
-            state = {'ent_embed': self.server.ent_embed,
-                 'rel_embed': [client.rel_embed for client in self.clients]}
-            torch.save(state, os.path.join(self.args.state_dir,
-                                       self.args.name + '.eps_' + str(visit[0]) + '.ckpt'))
-            visit.pop(0)
+        if self.args.use_dp:
+            visit = [2,4,8,16,24,32,48,64]
+            if len(visit) > 0 and self.clients[self.args.target_idx].eps >= visit[0]:
+                state = {'ent_embed': self.server.ent_embed,
+                    'rel_embed': [client.rel_embed for client in self.clients]}
+                torch.save(state, os.path.join(self.args.state_dir,
+                                        self.args.name + '.eps_' + str(visit[0]) + '.ckpt'))
+                visit.pop(0)
         
         for num_round in range(self.args.max_round):
             n_sample = max(round(self.args.fraction * self.num_clients), 1)
