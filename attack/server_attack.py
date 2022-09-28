@@ -101,10 +101,18 @@ class Attacker_Server(object):
         self.test_links = test_links
     
     def attack_3(self, target_ent_embed):
-        link_embeds = self.get_links(target_ent_embed)
-        link_label_score = self.clustering(link_embeds)
-        sorted_links = self.sort_links(link_label_score)
-        self.evaulate(sorted_links)
+        self.server_attack_res["passive_relation"]["k"] = []
+        self.server_attack_res["passive_relation"]["precision"] = []
+        self.server_attack_res["passive_relation"]["recall"] = []
+        self.server_attack_res["passive_relation"]["f1_score"] = []
+        for i in range(20):
+            self.args.rel_num_multiple += i * 0.05
+            self.server_attack_res["passive_relation"]["k"].append(self.args.rel_num_multiple)
+            self.make_test_data()
+            link_embeds = self.get_links(target_ent_embed)
+            link_label_score = self.clustering(link_embeds)
+            sorted_links = self.sort_links(link_label_score)
+            self.evaulate(sorted_links)
         json.dump(self.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
         sys.exit()
     
@@ -233,9 +241,9 @@ class Attacker_Server(object):
         recall = tp / (tp + fn)
         f1_score = 2 * precision * recall / (precision + recall)
         
-        self.server_attack_res["passive_relation"]["precision"] = precision
-        self.server_attack_res["passive_relation"]["recall"] = recall
-        self.server_attack_res["passive_relation"]["f1_score"] = f1_score
+        self.server_attack_res["passive_relation"]["precision"].append(precision)
+        self.server_attack_res["passive_relation"]["recall"].append(recall)
+        self.server_attack_res["passive_relation"]["f1_score"].append(f1_score)
         
         logging.info('precision : {}, {} / {}'.format(precision, tp, tp + fp))
         logging.info('recall : {}, {} / {}'.format(recall, tp, tp + fn))   
