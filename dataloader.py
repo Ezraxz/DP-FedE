@@ -128,7 +128,7 @@ def get_all_clients(all_data, args):
     all_ent = np.array([], dtype=int)
     for data in all_data:
         all_ent = np.union1d(all_ent, data['train']['edge_index_ori'].reshape(-1))
-    nentity = len(all_ent)
+    nentity = all_data[0]['nentity']
 
     train_dataloader_list = []
     test_dataloader_list = []
@@ -144,8 +144,9 @@ def get_all_clients(all_data, args):
                                   data['train']['edge_type'],
                                   data['train']['edge_index_ori'][1])).T
         if args.test_mode == 'fake' and k == args.target_client:
-            attack_test_triples = np.array(pickle.load(open("./data/attack-test.pkl", 'rb')))
+            attack_test_triples = np.array(pickle.load(open("./data/fb13-2-attack.pkl", 'rb')))
             train_triples =  np.concatenate((train_triples, attack_test_triples), axis=0)
+        
         all_train_triples.append(train_triples)
 
         valid_triples = np.stack((data['valid']['edge_index_ori'][0],

@@ -1,6 +1,5 @@
 
-
-import sys
+import shutil
 from dataloader import *
 import json
 import os
@@ -273,8 +272,7 @@ class FedE(object):
         self.valid_eval_weights = [len(client.valid_dataloader.dataset) / self.total_valid_data_size for client in self.clients]
 
         if self.args.is_attack:
-            if self.args.start_round != 0:
-                self.before_attack_load()
+           
             #transfer inference attack
             self.align_rel_list, self.rel_target2attack = get_attack_data(all_data, args)
             self.attacker_client = client_attack.Attacker_Client(args) 
@@ -286,13 +284,7 @@ class FedE(object):
             
             #relation inference attack
             self.attacker_server = server_attack.Attacker_Server(args)
-            self.attacker_server.get_eva_info(self.all_train_triples[self.args.target_client])
-            # self.attacker_server.make_test_data()
-            self.tp = 0
-            self.fn = 0
-            self.fp = 0
-            self.tn = 0
-        
+            self.attacker_server.get_eva_info(self.all_train_triples[self.args.target_client])          
         
     def write_training_loss(self, loss, e):
         self.args.writer.add_scalar("training/loss", loss, e)
@@ -315,7 +307,9 @@ class FedE(object):
                                        self.args.name + '.' + str(e) + '.ckpt'))
 
     def save_model(self, best_epoch):
-        os.rename(os.path.join(self.args.state_dir, self.args.name + '.' + str(best_epoch) + '.ckpt'),
+        # os.rename(os.path.join(self.args.state_dir, self.args.name + '.' + str(best_epoch) + '.ckpt'),
+        #           os.path.join(self.args.state_dir, self.args.name + '.best'))
+        shutil.copy(os.path.join(self.args.state_dir, self.args.name + '.' + str(best_epoch) + '.ckpt'),
                   os.path.join(self.args.state_dir, self.args.name + '.best'))
 
     def adaptive_eps(self, k, client_res, pre_client_res):
@@ -328,7 +322,7 @@ class FedE(object):
         for k, client in enumerate(self.clients):
             client.ent_embed = self.server.send_emb()
 
-    def train(self):
+    def train(self, attack_round = 0):
         best_epoch = 0
         best_mrr = 0
         bad_count = 0
@@ -354,71 +348,40 @@ class FedE(object):
                 self.reverse_embed = self.attacker_client.reverse_tail(self.clients[self.attack_idx].ent_embed)
             
             #fkg client train
-            round_loss = 0
-            eps_avg = 0
-            threads = []
-            for k in iter(sample_set):
-                t = ThreadWithReturnValue(target=self.clients[k].client_update)
-                t.start()
-                threads.append(t)
-            for t in threads:
-                client_loss, eps = t.join()
-                round_loss += client_loss
-                eps_avg += eps
-            round_loss /= n_sample
-            eps_avg /= self.num_clients
+            if self.args.is_attack and self.args.attack_type == 'server':
+                pass
+            else:
+                round_loss = 0
+                eps_avg = 0
+                threads = []
+                for k in iter(sample_set):
+                    t = ThreadWithReturnValue(target=self.clients[k].client_update)
+                    t.start()
+                    threads.append(t)
+                for t in threads:
+                    client_loss, eps = t.join()
+                    round_loss += client_loss
+                    eps_avg += eps
+                round_loss /= n_sample
+                eps_avg /= self.num_clients
             
             #active transfer inference attack
-            if self.args.is_attack and self.args.attack_type == 'client'and num_round == 1:
+            if self.args.is_attack and self.args.attack_type == 'client' and num_round == 1:
                 self.clients[self.attack_idx].ent_embed = self.reverse_embed
             
             #passive relation inference attack
             if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
                 logging.info('Attack-3 : attacker Server, target {}'.format(self.target_idx))
-                self.attacker_server.attack_3(self.clients[self.target_idx].ent_embed.clone().detach())
-            
-            """
-            #active relation inference attack
-            if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
-                logging.info('Attack-4 : attacker Server, target {}'.format(self.target_idx))
-                for k in iter(sample_set):
-                    self.clients[k].args.local_epoch = 5
-                self.attacker_server.select_ent(self.agg_ent_mask[self.args.target_client])
-                self.input_ent_embed = self.clients[self.target_idx].ent_embed
-                noise_embed = self.attacker_server.add_noise(self.input_ent_embed)
-                self.clients[self.target_idx].ent_embed = noise_embed
-                continue
-            if self.args.is_attack and num_round >= 1 and num_round <= 10 and self.args.attack_type == 'server':
-                tp, fn, fp, tn = self.attacker_server.attack_4(self.clients[self.target_idx].ent_embed)
-                self.tp += tp
-                self.fn += fn
-                self.fp += fp
-                self.tn += tn
-                self.attacker_server.select_ent(self.agg_ent_mask[self.args.target_client])
-                noise_embed = self.attacker_server.add_noise(self.input_ent_embed)
-                self.clients[self.target_idx].ent_embed = noise_embed
-                continue
-            if self.args.is_attack and self.args.attack_type == 'server' and  num_round > 10:
-                precision = self.tp / (self.tp + self.fp)
-                recall = self.tp / (self.tp +  self.fn)
-                f1_score = 2 * precision * recall / (precision + recall)
-                logging.info('precision : {}, {} / {}'.format(precision, self.tp, self.tp + self.fp))
-                logging.info('recall : {}, {} / {}'.format(recall, self.tp, self.tp +  self.fn))
-                logging.info('f1 score : {}'.format(f1_score))
-                
-                self.attacker_server.server_attack_res["active_relation"]["precision"] = precision
-                self.attacker_server.server_attack_res["active_relation"]["recall"] = recall
-                self.attacker_server.server_attack_res["active_relation"]["f1_score"] = f1_score
-                json.dump(self.attacker_server.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
-                sys.exit()  
-            """   
+                self.attacker_server.attack_3(self.clients[self.target_idx].ent_embed.clone().detach(), attack_round)
+                break
                      
             #fkg server aggregation
             self.server.aggregation(self.clients, self.ent_freq_mat, num_round)
             
             #active transfer inference attack
             if self.args.is_attack and num_round == 1 + self.args.cmp_round and self.args.attack_type == 'client':
-                self.attacker_client.attack_2(self.server.send_emb(), self.rel_target2attack)
+                self.attacker_client.attack_2(self.server.send_emb(), self.rel_target2attack, attack_round)
+                break
             
             #passive transfer inference attack
             if self.args.is_attack and num_round == 0 and self.args.attack_type == 'client':
@@ -428,7 +391,15 @@ class FedE(object):
                 self.attacker_client.get_target_embedding(self.server.send_emb())
                 self.attacker_client.attack_1(self.all_train_triples[self.target_idx], self.rel_target2attack, 
                                               self.align_rel_list)
-                        
+            
+            #collusion attack
+            if self.args.is_attack and num_round == 0 and self.args.attack_type == 'collusion':
+                logging.info('Collusion Attack-1 : attacker Server and Client {}, target {}'.format(self.attack_idx, self.target_idx))
+                self.attacker_client.get_local_data(self.clients[self.attack_idx].ent_embed, self.clients[self.attack_idx].rel_embed,
+                                                    self.all_train_triples[self.attack_idx])
+                self.attacker_client.get_target_embedding_collusion(self.server.send_emb(), self.clients[self.target_idx].ent_embed)
+                self.attacker_client.attack_1(self.all_train_triples[self.target_idx], self.rel_target2attack, 
+                                              self.align_rel_list)
 
             logging.info('round: {} | loss: {:.4f}'.format(num_round, np.mean(round_loss)))
             self.write_training_loss(np.mean(round_loss), num_round)
@@ -453,16 +424,17 @@ class FedE(object):
             if bad_count >= self.args.early_stop_patience or eps_avg >= self.args.sgd_eps:
                 logging.info('early stop at round {}'.format(num_round))
                 break
-
+        if self.args.is_attack:
+            return
         logging.info('finish training')
         logging.info('save best model')
         self.save_model(best_epoch)
         self.before_test_load()
         self.evaluate(istest=True)
 
-    def before_attack_load(self):
+    def before_attack_load(self, round):
         logging.info("loading embedding")
-        state = torch.load(self.args.attack_embed_dir + str(self.args.start_round) + '.ckpt', map_location=self.args.gpu)
+        state = torch.load(self.args.attack_embed_dir + str(round) + '.ckpt', map_location=self.args.gpu)
         self.server.ent_embed = state['ent_embed']
         for idx, client in enumerate(self.clients):
             client.rel_embed = state['rel_embed'][idx]

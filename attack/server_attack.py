@@ -20,20 +20,12 @@ class Attacker_Server(object):
         self.center_links = []
         self.center_links_embed = []
         
-        #attack-4
-        self.test_links_ent_4 = None
-        self.ent_embed_1 = None
-        self.ent_embed_2 = None
-        self.num_link = 0
-        self.false_link_ent = []
-        
         #evaulate
         self.target_triples = None
         self.target_links = []
         
         self.server_attack_res = {}
         self.server_attack_res["passive_relation"] = {}
-        self.server_attack_res["active_relation"] = {}
         
     def get_eva_info(self, target_triples):
         self.target_triples = target_triples.tolist()
@@ -44,34 +36,20 @@ class Attacker_Server(object):
         ent_index = []
         rel_index = []
         
-        if self.args.test_mode == 'normal':
-            test_triples_index = np.random.choice(len(self.target_triples), round(self.args.test_data_count / 2)).tolist() 
-            for idx in test_triples_index:
-                h, r, t = self.target_triples[idx]
-                if h == t:
-                    continue
-                test_triples.append(self.target_triples[idx])
-                ent_index.append(h)
-                ent_index.append(t)
-                if r not in rel_index:
-                    self.center_links.append([h, t])
-                rel_index.append(r)
-                self.target_links.append([h, 1, t])
-                test_links.append([h, 1, t])
-        else:
-            test_triples = pickle.load(open("./data/attack-test.pkl", 'rb'))
-            for tri in test_triples:
-                h, r, t = tri
-                if h == t:
-                    continue
-                ent_index.append(h)
-                ent_index.append(t)
-                if r not in rel_index:
-                    self.center_links.append([h, t])
-                rel_index.append(r)
-                self.target_links.append([h, 1, t])
-                test_links.append([h, 1, t])
         
+        test_triples_index = np.random.choice(len(self.target_triples), round(self.args.test_data_count / 2)).tolist() 
+        for idx in test_triples_index:
+            h, r, t = self.target_triples[idx]
+            if h == t:
+                continue
+            test_triples.append(self.target_triples[idx])
+            ent_index.append(h)
+            ent_index.append(t)
+            if r not in rel_index:
+                self.center_links.append([h, t])
+            rel_index.append(r)
+            self.target_links.append([h, 1, t])
+            test_links.append([h, 1, t])       
             
         ent_index = list(set(ent_index))
         rel_index = list(set(rel_index))
@@ -100,31 +78,33 @@ class Attacker_Server(object):
         
         self.test_links = test_links
     
-    def attack_3(self, target_ent_embed):
+    def attack_3(self, target_ent_embed, attack_round):
         self.server_attack_res["passive_relation"]["k"] = []
         self.server_attack_res["passive_relation"]["precision"] = []
         self.server_attack_res["passive_relation"]["recall"] = []
         self.server_attack_res["passive_relation"]["f1_score"] = []
-        for i in range(20):
-            self.args.rel_num_multiple += i * 0.05
+        self.server_attack_res["passive_relation"]["fpr"] = []
+        self.server_attack_res["passive_relation"]["tpr"] = []
+        
+        for i in range(21):
+            self.center_links = []
+            self.center_links_embed = []
+            self.args.rel_num_multiple = 0.5 + i * 0.05
             self.server_attack_res["passive_relation"]["k"].append(self.args.rel_num_multiple)
             self.make_test_data()
             link_embeds = self.get_links(target_ent_embed)
             link_label_score = self.clustering(link_embeds)
             sorted_links = self.sort_links(link_label_score)
             self.evaulate(sorted_links)
-        json.dump(self.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
-        sys.exit()
-    
-    def attack_4(self, updated_embed_2):
-        sorted_ent = self.compute_influence(updated_embed_2)
-        tp, fn, fp, tn = self.evaulate_4(sorted_ent)
-        return tp, fn, fp, tn
+        max_f1_score = max(self.server_attack_res["passive_relation"]["f1_score"])
+        self.server_attack_res["passive_relation"]["max_f1_score"] = max_f1_score
+        json.dump(self.server_attack_res, open(self.args.attack_res_dir + '/' + self.args.name + str(attack_round) +'.json', 'w'))
+        
         
     def get_prob_rel(self, head, tail):
         if self.args.model == 'TransE':
             link_embed = tail - head
-        
+            
         elif self.args.model == 'DistMult':
             link_embed = tail - head
         
@@ -137,7 +117,7 @@ class Attacker_Server(object):
             link_embed = torch.div(re_relation, im_relation)
         
         elif self.args.model == 'RotatE':
-            link_embed = tail - head
+            link_embed = torch.div(tail, head)
         
         return link_embed
     
@@ -241,102 +221,18 @@ class Attacker_Server(object):
         recall = tp / (tp + fn)
         f1_score = 2 * precision * recall / (precision + recall)
         
+        tpr = tp / (tp + fn)
+        fpr = fp / (fp + tn)
+        
         self.server_attack_res["passive_relation"]["precision"].append(precision)
         self.server_attack_res["passive_relation"]["recall"].append(recall)
         self.server_attack_res["passive_relation"]["f1_score"].append(f1_score)
+        self.server_attack_res["passive_relation"]["fpr"].append(fpr)
+        self.server_attack_res["passive_relation"]["tpr"].append(tpr)
         
         logging.info('precision : {}, {} / {}'.format(precision, tp, tp + fp))
         logging.info('recall : {}, {} / {}'.format(recall, tp, tp + fn))   
         logging.info('f1 score : {}'.format(f1_score))
     
-    def select_ent(self, ent_mask):
-        self.ent_attack_4 = np.random.choice(len(ent_mask.cpu().numpy()))
-        
-        logging.info('select ent index: {}'.format(self.ent_attack_4))
-        while ent_mask[self.ent_attack_4] == 0:
-            self.ent_attack_4 = np.random.choice(len(ent_mask.cpu().numpy()))
-        
-        test_links = []
-        for tri in self.target_triples:
-            h, r, t = tri
-            if h == self.ent_attack_4 or t == self.ent_attack_4:
-                if h != self.ent_attack_4:
-                    test_links.append(h)
-                if t != self.ent_attack_4:
-                    test_links.append(t)
-        
-        test_links = list(set(test_links))
-        
-        self.false_link_ent.clear()
-        
-        while len(self.false_link_ent) < len(test_links):
-            ent = np.random.choice(len(ent_mask.cpu().numpy()))
-            if ent_mask[ent] != 0 and ent not in test_links:
-                self.false_link_ent.append(ent)        
-
-        self.test_links_ent_4 = test_links
-        self.num_link = len(test_links)         
     
-    def add_noise(self, updated_embed):
-        logging.info('Adding noise...')
-        updated_embed_np = updated_embed.cpu().detach().numpy()
-        noise = np.full(self.args.hidden_dim, 0.2)
-        updated_embed_np[self.ent_attack_4] = updated_embed_np[self.ent_attack_4] + noise
-        # updated_embed_np[self.ent_attack_4] = updated_embed_np[self.ent_attack_4] * 3
-        self.len_test_4 = len(updated_embed_np)
-        updated_embed = torch.from_numpy(updated_embed_np).to(self.args.gpu).requires_grad_()
-        self.ent_embed_1 = updated_embed.cpu().clone().detach()
-
-        return updated_embed
-
-    def compute_influence(self, updated_embed):
-        logging.info('Compute influence')
-        self.ent_embed_2 = updated_embed.cpu().detach()
-        influence_matrix = self.ent_embed_2 - self.ent_embed_1
-        influence_score = torch.norm(influence_matrix, p=2, dim=1).numpy()
-        
-        id2score = dict()
-        for idx, score in enumerate(influence_score):
-             id2score[idx] = score
-        
-        id2score = sorted(id2score.items(), key=lambda item:(item[1]), reverse=True)
-        id2score = {k:v for k,v in id2score}
-        
-        sorted_ent = []
-        for idx in id2score.keys():
-            if idx in self.false_link_ent or idx in self.test_links_ent_4:
-                sorted_ent.append(idx)
-                if len(sorted_ent) >= round(self.num_link * self.args.rel_num_multiple):
-                    break
-        
-        # for idx, ent in enumerate(id2score.keys()):
-        #     if ent in self.test_links_ent_4:
-        #         print(idx)
-        
-        return sorted_ent
     
-    def evaulate_4(self, sorted_ent):
-        tp = 0
-        fn = 0
-        fp = 0
-        tn = 0
-        for ent in sorted_ent:
-            if ent in self.test_links_ent_4:
-                tp += 1
-            else:
-                fp += 1
-        
-        fn = len(self.test_links_ent_4) - tp
-        tn = self.len_test_4 - len(self.test_links_ent_4) - fp
-        
-        precision = tp / (tp + fp)
-        recall = tp / (tp + fn)
-        f1_score = 0
-        if precision != 0 or recall != 0:
-            f1_score = 2 * precision * recall / (precision + recall)
-                
-        logging.info('precision : {:.4f}, {} / {}'.format(precision, tp, tp + fp))
-        logging.info('recall : {:.4f}, {} / {}'.format(recall, tp, tp + fn))  
-        logging.info('f1 score : {:.4f}'.format(f1_score))
-
-        return tp, fn, fp, tn

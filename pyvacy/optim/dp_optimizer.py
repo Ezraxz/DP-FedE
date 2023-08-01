@@ -89,7 +89,8 @@ def make_optimizer_class(cls):
                                 grad_mask[indices] = 1
                                                    
                             dp_accum_grad.add_(self.l2_norm_clip * self.noise_multiplier * torch.randn_like(dp_accum_grad))
-                            dp_accum_grad.mul_(grad_mask)              
+                            if self.args.naive == False:
+                                dp_accum_grad.mul_(grad_mask)              
                             param.grad.data.add_(dp_accum_grad)
                             
                         param.grad.data.mul_(self.microbatch_size / self.minibatch_size)

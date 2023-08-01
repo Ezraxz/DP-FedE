@@ -1,5 +1,4 @@
 import copy
-from hashlib import new
 
 import os
 import random
@@ -8,7 +7,7 @@ from collections import defaultdict as ddict
 from tqdm import tqdm
 import pickle
 
-data_path = './dataset/FB15k-237'
+data_path = './dataset/FB13'
 data_size = 0.6
 client_num = 2
 
@@ -27,7 +26,6 @@ for line in rel2id_file.readlines():
     rel, idx = line.split()
     rel2id[rel] = int(idx)
 id2rel = {v: k for k, v in rel2id.items()}
-
 
 
 train2id_file = open(os.path.join(data_path, 'train2id.txt'))
@@ -73,29 +71,28 @@ train_triples = train_triples.tolist()
 
 for i in tqdm(range(client_num)):
     newNumEnt = round(num_ent * data_size)
-    
     num_client_avg = round(len(ent_list) / client_num)
     
     client_ent.append([])
     if i != client_num - 1:
         client_ent[i] = (np.random.choice(ent_list, num_client_avg, replace=False))
-        ent_pool = np.setdiff1d(ent_list, client_ent, assume_unique=True)
+        ent_list = np.setdiff1d(ent_list, client_ent, assume_unique=True)
     else:
         client_ent[i] = ent_list
     
     client_ent_list = client_ent[i].tolist()
 
-    while len(client_ent_list) < newNumEnt:
-        e = random.choice(ent_list_2)
+    for e in ent_list_2:      
         if e not in client_ent_list:
             client_ent_list.append(e)
+        if len(client_ent_list) >= newNumEnt:
+            break
 
     
     sampleEnt = []
     
     for e in client_ent_list:
         sampleEnt.append(id2ent[e])
-
 
     newEnt2id = dict()
     newRel2id = dict()
@@ -144,6 +141,7 @@ for i in tqdm(range(client_num)):
         if len(trainTriples) < len_ori * 0.75:
             break
 
+    print(len(trainTriples))
     entPool = list(set(entPool1))
     for id in entPool:
         ent = id2ent[id]
@@ -177,7 +175,6 @@ for i in tqdm(range(client_num)):
         idx += 1
 
     idx = 0
-
     for key in newRel2id:
         newRel2id[key] = idx
         idx += 1
@@ -222,7 +219,8 @@ for i in tqdm(range(client_num)):
     test_edge_index = np.array(newTestTriples)[:, [0, 2]].T
     test_edge_type = np.array(newTestTriples)[:, 1].T
 
-    client_data_dict = {'train': {'edge_index': train_edge_index, 'edge_type': train_edge_type, 
+    client_data_dict = {'nentity': num_ent,
+                        'train': {'edge_index': train_edge_index, 'edge_type': train_edge_type, 
                             'edge_index_ori': train_edge_index_ori, 'edge_type_ori': train_edge_type_ori},
                 'test': {'edge_index': test_edge_index, 'edge_type': test_edge_type, 
                             'edge_index_ori': test_edge_index_ori, 'edge_type_ori': test_edge_type_ori},
@@ -230,5 +228,5 @@ for i in tqdm(range(client_num)):
                         'edge_index_ori': valid_edge_index_ori, 'edge_type_ori': valid_edge_type_ori}}
     client_data.append(client_data_dict)
 
-pickle.dump(client_data, open('./data/fb15k237-2-attack.pkl', 'wb'))
+pickle.dump(client_data, open('./data/fb13-2.pkl', 'wb'))
     

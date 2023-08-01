@@ -41,32 +41,45 @@ class Attacker_Client(object):
         test_triples = self.make_test_data(target_triples, rel_target2attack)
         self.test_2_triples = test_triples
         self.len_test_tri = len(test_triples)
-        logging.info('Attack-1 result: ')
+        if self.args.attack_type == 'client':
+            logging.info('Attack-1 result: ')
+        else:
+            logging.info('Collusion Attack-1 result: ')
         self.client_attack_res["passive_transfer"]["threshold"] = []
         self.client_attack_res["passive_transfer"]["precision"] = []
         self.client_attack_res["passive_transfer"]["recall"] = []
         self.client_attack_res["passive_transfer"]["f1score"] = []
+        self.client_attack_res["passive_transfer"]["fpr"] = []
+        self.client_attack_res["passive_transfer"]["tpr"] = []
         for i in range(20):
             self.client_attack_res["passive_transfer"]["threshold"].append(i*0.04)
             evaulate_triples = self.compare_score(test_triples, i*0.04)
+            if len(evaulate_triples) == 0:
+                break
             self.evaulate(len(test_triples), evaulate_triples, rel_target2attack, 1)
-        mean_f1_score = mean(self.client_attack_res["passive_transfer"]["f1score"])
-        self.client_attack_res["passive_transfer"]["mean_f1_score"] = mean_f1_score
+        max_f1_score = max(self.client_attack_res["passive_transfer"]["f1score"])
+        self.client_attack_res["passive_transfer"]["max_f1_score"] = max_f1_score
             
-    def attack_2(self, updated_ent_embed, rel_target2attack):
-        logging.info('Attack-2 result: ')
+    def attack_2(self, updated_ent_embed, rel_target2attack, attack_round):
+        if self.args.attack_type == 'client':
+            logging.info('Attack-2 result: ')
+        else:
+            logging.info('Collusion Attack-2 result: ')
         self.client_attack_res["active_transfer"]["threshold"] = []
         self.client_attack_res["active_transfer"]["precision"] = []
         self.client_attack_res["active_transfer"]["recall"] = []
         self.client_attack_res["active_transfer"]["f1score"] = []
+        self.client_attack_res["active_transfer"]["fpr"] = []
+        self.client_attack_res["active_transfer"]["tpr"] = []
         for i in range(20):
             self.client_attack_res["active_transfer"]["threshold"].append(i*0.04)
             evaulate_triples = self.compute_s2(updated_ent_embed, i*0.04)
+            if len(evaulate_triples) == 0:
+                break
             self.evaulate(self.len_test_tri, evaulate_triples, rel_target2attack, 2)
-        mean_f1_score = mean(self.client_attack_res["active_transfer"]["f1score"])
-        self.client_attack_res["active_transfer"]["mean_f1_score"] = mean_f1_score
-        json.dump(self.client_attack_res, open(self.args.attack_res_dir + '/' + self.args.name +'.json', 'w'))
-        sys.exit()
+        max_f1_score = mean(self.client_attack_res["active_transfer"]["f1score"])
+        self.client_attack_res["active_transfer"]["max_f1_score"] = max_f1_score
+        json.dump(self.client_attack_res, open(self.args.attack_res_dir + '/' + self.args.name + str(attack_round) +'.json', 'w'))
     
     
     def get_local_data(self, local_ent_embed, local_rel_embed, local_triples):
@@ -83,11 +96,20 @@ class Attacker_Client(object):
         updated_ent_embed = updated_ent_embed * self.args.num_client
         diff_ent_embed = torch.sub(self.local_ent_embedding, updated_ent_embed)
         self.diff_ent_embed = torch.div(diff_ent_embed, self.args.num_client - 1)
+        
+    def get_target_embedding_collusion(self, updated_ent_embed, target_ent_embed):
+        align_ent_embed = torch.sub(self.local_ent_embedding, updated_ent_embed)
+        align_ent_list = torch.sum(align_ent_embed, 1)
+        self.align_ent_list = align_ent_list
+        self.align_ent_list[align_ent_list != 0] = 1
+        
+        self.diff_ent_embed = target_ent_embed
          
     def make_test_data(self, target_triples, rel_target2attack):
         logging.info("Making test data...")
         test_triples = []
-       # save_triples = []
+        if self.args.attack_type == 'make_data':
+            save_triples = []
         
         rel_attack2target = {v: k for k, v in rel_target2attack.items()}
         self.target_triples = target_triples.tolist()
@@ -101,7 +123,7 @@ class Attacker_Client(object):
                 if len(test_triples) >= self.args.test_data_count / 2:
                     break
         else:
-            attack_test_triples = pickle.load(open("./data/attack-test.pkl", 'rb'))
+            attack_test_triples = pickle.load(open("./data/fb13-2-attack.pkl", 'rb'))
             for tri in attack_test_triples:
                 h, r, t = tri
                 if self.align_ent_list[h] == 1 and self.align_ent_list[t] == 1 and r in rel_target2attack.keys():
@@ -129,8 +151,11 @@ class Attacker_Client(object):
             tri_1 = [h, rel_attack2target[r], t]
             if tri not in self.local_triples and tri_1 not in self.target_triples:
                 test_triples.append(tri)
-                #save_triples.append(tri_1)
-        #pickle.dump(save_triples, open('./data/attack-test.pkl', 'wb'))
+                if self.args.attack_type == 'make_data':
+                    save_triples.append(tri_1)
+        if self.args.attack_type == 'make_data':
+            pickle.dump(save_triples, open('./data/fb13-2-attack.pkl', 'wb'))
+            sys.exit()
         return test_triples
             
     def compare_score(self, test_triples, add_thd):
@@ -172,16 +197,13 @@ class Attacker_Client(object):
                 index=t
             ).unsqueeze(1)
             rep_score = self.score_func(head, relation, tail)
-            
-
-            # if rep_score / pre_score > self.args.threshold_attack1 + add_thd or pre_score / rep_score > self.args.threshold_attack1 + add_thd:
-            #     exist_tri.append(tri)
-            
-            if rep_score / pre_score  > self.args.threshold_attack1 + add_thd:
-                exist_tri.append(tri)
-            
-            # if pre_score / rep_score > self.args.threshold_attack1 + add_thd:
-            #     exist_tri.append(tri)
+                    
+            if self.args.model == 'TransE':
+                if abs(rep_score / pre_score)  > self.args.threshold_attack1 + add_thd:
+                    exist_tri.append(tri)
+            else:
+                if abs(pre_score / rep_score) >= self.args.threshold_attack1 + add_thd:
+                    exist_tri.append(tri)
         
         return exist_tri
     
@@ -190,7 +212,7 @@ class Attacker_Client(object):
         if self.args.model == 'TransE':
             score = (head + relation) - tail
             score = self.gamma.item() - torch.norm(score, p=1, dim=2)
-        
+            
         elif self.args.model == 'DistMult':
             score = (head * relation) * tail
             score = score.sum(dim = 2)
@@ -242,15 +264,26 @@ class Attacker_Client(object):
         
         precision = tp / (tp + fp)
         recall = tp / (tp + fn)
-        f1_score = 2 * precision * recall / (precision + recall)
+        
+        tpr = tp / (tp + fn)
+        fpr = fp / (fp + tn)
+        
+        if precision + recall == 0:
+            f1_score = 0
+        else:
+            f1_score = 2 * precision * recall / (precision + recall)
         if type == 1:
             self.client_attack_res["passive_transfer"]["precision"].append(precision)
             self.client_attack_res["passive_transfer"]["recall"].append(recall)
             self.client_attack_res["passive_transfer"]["f1score"].append(f1_score)
+            self.client_attack_res["passive_transfer"]["fpr"].append(fpr)
+            self.client_attack_res["passive_transfer"]["tpr"].append(tpr)
         else:
             self.client_attack_res["active_transfer"]["precision"].append(precision)
             self.client_attack_res["active_transfer"]["recall"].append(recall)
             self.client_attack_res["active_transfer"]["f1score"].append(f1_score)
+            self.client_attack_res["active_transfer"]["fpr"].append(fpr)
+            self.client_attack_res["active_transfer"]["tpr"].append(tpr)
         
         logging.info('precision : {:.4f}, {} / {}'.format(precision, tp, tp + fp))
         logging.info('recall : {:.4f}, {} / {}'.format(recall, tp, tp + fn))
@@ -266,7 +299,10 @@ class Attacker_Client(object):
             if t in reversed_ent:
                 continue
             reversed_ent.append(t)
-            updated_ent_embed_np[t] = updated_ent_embed_np[t] * -1
+            if self.args.model == 'TransE' or self.args.model == 'RotatE':
+                updated_ent_embed_np[t] = updated_ent_embed_np[t] * -1
+            else:
+                updated_ent_embed_np[t] = updated_ent_embed_np[t] * 1.8
 
         updated_ent_embed = torch.from_numpy(updated_ent_embed_np).to(self.args.gpu).requires_grad_()
         
@@ -326,7 +362,7 @@ class Attacker_Client(object):
             score_1 = self.triples_score_1[idx]
             score_2 = self.score_func(head, relation, tail)
 
-            if score_1 / score_2 > self.args.threshold_attack2 + add_rhd:
+            if abs(score_1 / score_2) > self.args.threshold_attack2 + add_rhd:
                 exist_tri.append(tri)
                
         return exist_tri
