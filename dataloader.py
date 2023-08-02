@@ -144,7 +144,7 @@ def get_all_clients(all_data, args):
                                   data['train']['edge_type'],
                                   data['train']['edge_index_ori'][1])).T
         if args.test_mode == 'fake' and k == args.target_client:
-            attack_test_triples = np.array(pickle.load(open("./data/fb13-2-attack.pkl", 'rb')))
+            attack_test_triples = np.array(pickle.load(open(args.attack_data_path, 'rb')))
             train_triples =  np.concatenate((train_triples, attack_test_triples), axis=0)
         
         all_train_triples.append(train_triples)

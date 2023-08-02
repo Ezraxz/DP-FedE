@@ -18,6 +18,7 @@ from fusion import *
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='./data/fb13-2.pkl', type=str)
+    parser.add_argument('--attack_data_path', default='./data/fb13-2-attack.pkl', type=str)
      
     parser.add_argument('--name', default='fed2_fb13_transe_dp_naive', type=str)
     parser.add_argument('--state_dir', '-state_dir', default='./state/fed2_fb13_transe_dp_naive', type=str)
@@ -119,6 +120,8 @@ if __name__ == '__main__':
                         learner.before_attack_load(round)
                         learner.train(round)
             else:
+                if args.attack_type == 'make_data':
+                    learner.train()
                 rounds = [2,4,8,16,24,32,48,64]
                 for round in rounds:
                     if os.path.exists(args.attack_embed_dir + 'eps_' + str(round) + '.ckpt'):
