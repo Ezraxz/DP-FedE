@@ -35,6 +35,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', default=0.001, type=int)
     
     parser.add_argument('--model_mode', default='fusion', type=str, choices=['fusion', 'nofusion'])
+    parser.add_argument('--is_single', default=False, type=bool)
     
     # for FedE
     parser.add_argument('--num_client', default=2, type=int)

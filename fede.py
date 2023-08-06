@@ -376,7 +376,10 @@ class FedE(object):
                 break
                      
             #fkg server aggregation
-            self.server.aggregation(self.clients, self.ent_freq_mat, num_round)
+            if self.args.is_single:
+                pass
+            else:
+                self.server.aggregation(self.clients, self.ent_freq_mat, num_round)
             
             #active transfer inference attack
             if self.args.is_attack and num_round == 1 + self.args.cmp_round and self.args.attack_type == 'client':

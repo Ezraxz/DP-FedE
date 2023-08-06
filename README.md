@@ -19,6 +19,7 @@
 --lr: 学习率
     
 --model_mode: 如果需要模型融合，选择fusion，然后修改main.py 107行的路径
+--is_single: 是否客户端本地训练
     
 ### for FedE
 --num_client: 客户端数
@@ -67,3 +68,59 @@
     
 ### test
 --test_mode: 默认fake，normal只在制作攻击虚假数据集时使用
+
+## 使用
+
+数据都在data的压缩包，解压一下
+
+以下命令需要针对不同数据集和算法，都要做修改
+
+
+### 正常Fede
+--use_dp: False
+--is_attack: False
+
+### DP-Fede
+--use_dp: True
+--naive: False
+--decline_mult : 1 (1 等于不改变噪声)
+--is_attack: False
+
+### DP-动态-Fede
+--use_dp: True
+--naive: False
+--decline_mult : 小于1 (1 等于不改变噪声)
+--is_attack: False
+
+### DP-简单-Fede
+--use_dp: True
+--naive: True
+--decline_mult : 1 (1 等于不改变噪声)
+--is_attack: False
+
+### 单独客户端 DP
+--use_dp: True
+--naive: True
+--decline_mult : 1 (1 等于不改变噪声)
+--is_single: True
+--is_attack: False
+
+### 单独客户端
+--use_dp: False
+--is_attack: False
+--is_single: True
+
+### 客户端攻击
+其他训练参数与对应训练方法一样
+--is_attack: True
+---attack_type: client
+
+### 服务器攻击
+其他训练参数与对应训练方法一样
+--is_attack: True
+---attack_type: server
+
+### 联合攻击
+其他训练参数与对应训练方法一样
+--is_attack: True
+---attack_type: collusion
