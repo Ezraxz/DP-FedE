@@ -346,6 +346,11 @@ class FedE(object):
             if self.args.is_attack and self.args.attack_type == 'client' and num_round == 1:
                 logging.info('Attack-2 : attacker {}, target {}'.format(self.attack_idx, self.target_idx))
                 self.reverse_embed = self.attacker_client.reverse_tail(self.clients[self.attack_idx].ent_embed)
+                
+            #collusion attack
+            if self.args.is_attack and self.args.attack_type == 'collusion' and num_round == 1:
+                logging.info('Collusion Attack-2 : attacker {}, target {}'.format(self.attack_idx, self.target_idx))
+                self.reverse_embed = self.attacker_client.reverse_tail(self.clients[self.attack_idx].ent_embed)
             
             #fkg client train
             if self.args.is_attack and self.args.attack_type == 'server':
@@ -369,6 +374,10 @@ class FedE(object):
             if self.args.is_attack and self.args.attack_type == 'client' and num_round == 1:
                 self.clients[self.attack_idx].ent_embed = self.reverse_embed
             
+            #collusion attack
+            if self.args.is_attack and self.args.attack_type == 'collusion' and num_round == 1:
+                self.clients[self.attack_idx].ent_embed = self.reverse_embed
+            
             #passive relation inference attack
             if self.args.is_attack and num_round == 0 and self.args.attack_type == 'server':
                 logging.info('Attack-3 : attacker Server, target {}'.format(self.target_idx))
@@ -386,6 +395,11 @@ class FedE(object):
                 self.attacker_client.attack_2(self.server.send_emb(), self.rel_target2attack, attack_round)
                 break
             
+            #collusion attack
+            if self.args.is_attack and num_round == 1 + self.args.cmp_round and self.args.attack_type == 'collusion':
+                self.attacker_client.attack_2(copy.deepcopy(self.clients[self.target_idx].ent_embed), self.rel_target2attack, attack_round)
+                break
+            
             #passive transfer inference attack
             if self.args.is_attack and num_round == 0 and self.args.attack_type == 'client':
                 logging.info('Attack-1 : attacker {}, target {}'.format(self.attack_idx, self.target_idx))
@@ -400,7 +414,7 @@ class FedE(object):
                 logging.info('Collusion Attack-1 : attacker Server and Client {}, target {}'.format(self.attack_idx, self.target_idx))
                 self.attacker_client.get_local_data(self.clients[self.attack_idx].ent_embed, self.clients[self.attack_idx].rel_embed,
                                                     self.all_train_triples[self.attack_idx])
-                self.attacker_client.get_target_embedding_collusion(self.server.send_emb(), self.clients[self.target_idx].ent_embed)
+                self.attacker_client.get_target_embedding_collusion(self.server.send_emb(), copy.deepcopy(self.clients[self.target_idx].ent_embed))
                 self.attacker_client.attack_1(self.all_train_triples[self.target_idx], self.rel_target2attack, 
                                               self.align_rel_list)
 
